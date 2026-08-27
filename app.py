@@ -440,7 +440,7 @@ with tab_kanban:
         </div>
         """, unsafe_allow_html=True)
         
-        col_act1, col_act2, col_act3 = st.columns()
+        col_act1, col_act2, col_act3 = st.columns(3)
         
         with col_act1:
             st.markdown("**1. Mover Masivamente de Etapa:**")
