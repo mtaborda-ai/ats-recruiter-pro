@@ -577,7 +577,7 @@ with tab_comms:
     
     if not target_cands.empty:
         for _, c in target_cands.iterrows():
-            c1, c2, c3 = st.columns()
+            c1, c2, c3 = st.columns(3)
             msg = msg_template.format(nombre=c['nombre'], ciudad=c['ciudad'], etapa=c['etapa'])
             with c1:
                 st.markdown(f"**{c['nombre']}** ({c['ciudad']})")
