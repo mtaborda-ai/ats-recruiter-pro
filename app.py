@@ -493,7 +493,7 @@ with tab_kanban:
             st.info("Aún no has creado ninguna etiqueta.")
 
     # 5. BOTONES DE SELECCIÓN RÁPIDA
-    col_sel1, col_sel2 = st.columns()
+    col_sel1, col_sel2 = st.columns(3)
     with col_sel1:
         st.caption(f"Mostrando **{len(filtered_df)}** candidatos. Marca las casillas para moverlos o etiquetarlos juntos.")
     with col_sel2:
