@@ -430,7 +430,7 @@ with tab_kanban:
     with col_tools2:
         with st.expander("🎨 Asignar / Personalizar Colores de Etiquetas"):
             if sorted_tags:
-                col_c1, col_c2, col_c3 = st.columns()
+                col_c1, col_c2, col_c3 = st.columns(3)
                 with col_c1:
                     tag_to_color = st.selectbox("Etiqueta:", sorted_tags, key="color_tag_picker_tab1")
                 with col_c2:
