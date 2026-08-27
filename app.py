@@ -491,7 +491,7 @@ with tab_kanban:
 
     # 4. HERRAMIENTA PARA ASIGNAR COLORES A ETIQUETAS
     with st.expander("🎨 Asignar / Personalizar Colores de Etiquetas"):
-        col_c1, col_c2, col_c3 = st.columns(3)
+        col_c1, col_c2, col_c3 = st.columns()
         with col_c1:
             tag_to_color = st.selectbox("Selecciona una Etiqueta:", options=sorted_tags if sorted_tags else ["Caba", "27/08"], key="color_tag_picker_tab1")
         with col_c2:
