@@ -373,6 +373,7 @@ with tab_kanban:
         
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Filtrado DuckDB
     if not df_all.empty:
         con = duckdb.connect(database=':memory:')
         con.register('candidates', df_all)
