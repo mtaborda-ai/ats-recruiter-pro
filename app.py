@@ -115,11 +115,11 @@ def sync_data_to_sheet(df: pd.DataFrame):
         }
         resp = requests.post(API_URL, json=payload, timeout=60)
         if resp.status_code == 200:
-            st.toast("✅ Google Sheets actualizado.")
+            st.toast("✅ Google Sheets actualizado con éxito.")
         else:
             st.error(f"Error al guardar: {resp.text}")
     except requests.exceptions.Timeout:
-        st.warning("⚠️ La sincronización se está completando en segundo plano.")
+        st.warning("⚠️ La sincronización se está completando en segundo plano en Google Drive.")
     except Exception as e:
         st.error(f"Error de sincronización: {e}")
 
@@ -145,6 +145,26 @@ def update_candidate_details(cand_id: int, tags: str, notas: str):
         df_all.loc[idx[0], "tags"] = tags
         df_all.loc[idx[0], "notas"] = notas
         sync_data_to_sheet(df_all)
+
+def apply_bulk_tags(candidate_ids: list, new_tags_str: str, mode: str = "append"):
+    """Aplica etiquetas masivamente a una lista de IDs de candidatos."""
+    global df_all
+    new_tags_list = [t.strip() for t in new_tags_str.split(",") if t.strip()]
+    if not new_tags_list:
+        return
+        
+    for cid in candidate_ids:
+        idx = df_all.index[df_all["id"] == cid]
+        if len(idx) > 0:
+            current_tags = [t.strip() for t in str(df_all.loc[idx[0], "tags"]).split(",") if t.strip()]
+            if mode == "append":
+                # Une y elimina duplicados manteniendo el orden
+                combined = list(dict.fromkeys(current_tags + new_tags_list))
+                df_all.loc[idx[0], "tags"] = ", ".join(combined)
+            else: # overwrite
+                df_all.loc[idx[0], "tags"] = ", ".join(new_tags_list)
+                
+    sync_data_to_sheet(df_all)
 
 def insert_single(nombre, email, telefono, ciudad, etapa, tags, notas):
     global df_all
@@ -175,7 +195,7 @@ def insert_batch(new_records_df: pd.DataFrame):
 # =====================================================================
 # 3. PARSER DE EXCEL / CSV (COMPUTRABAJO & GENERAL)
 # =====================================================================
-def parse_computrabajo_or_generic_file(file, default_team_tag="", default_city_tag="") -> pd.DataFrame:
+def parse_computrabajo_or_generic_file(file, custom_bulk_tags="") -> pd.DataFrame:
     file.seek(0)
     if file.name.endswith('.csv'):
         df_preview = pd.read_csv(file, nrows=5)
@@ -227,14 +247,12 @@ def parse_computrabajo_or_generic_file(file, default_team_tag="", default_city_t
     clean['ciudad'] = df_raw[city_c].fillna('No especificada').astype(str).str.strip() if city_c else "No especificada"
     clean['etapa'] = "Sin gestionar"
     
-    # Construcción de Etiquetas dinámicas
+    # Preparar tags personalizados iniciales
+    extra_tags = [t.strip() for t in custom_bulk_tags.split(",") if t.strip()]
+    
     tags_list = []
     for _, row in df_raw.iterrows():
-        t_items = []
-        if default_team_tag:
-            t_items.append(default_team_tag.strip())
-        if default_city_tag:
-            t_items.append(default_city_tag.strip())
+        t_items = list(extra_tags)
         if title_c and str(row.get(title_c, '')).strip() not in ['', 'nan', 'No especificado']:
             t_items.append(str(row[title_c]).strip())
         if age_c and str(row.get(age_c, '')).strip() not in ['', 'nan', '0']:
@@ -278,7 +296,7 @@ if not df_all.empty and "tags" in df_all.columns:
 sorted_tags = sorted(list(all_unique_tags))
 
 # =====================================================================
-# 5. BARRA LATERAL (FILTROS)
+# 5. BARRA LATERAL (FILTROS MULTI-ETIQUETA)
 # =====================================================================
 with st.sidebar:
     st.title("💼 ATS Cloud")
@@ -290,12 +308,15 @@ with st.sidebar:
     st.divider()
     st.subheader("🔍 Filtros de Búsqueda")
     
-    # Filtro por Ciudad
     cities = ["Todas"] + sorted(list(df_all["ciudad"].replace("", "No especificada").unique())) if not df_all.empty else ["Todas"]
     selected_city = st.selectbox("Filtrar por Ubicación / Barrio", cities)
     
-    # Filtro por Etiquetas Libres (Ciudad, Equipo, etc.)
-    selected_tags = st.multiselect("🏷️ Filtrar por Etiquetas", options=sorted_tags)
+    # Filtro multi-etiqueta
+    selected_tags = st.multiselect("🏷️ Filtrar por Etiquetas (ej: Caba, 27/08)", options=sorted_tags)
+    
+    tag_logic = "AND"
+    if len(selected_tags) > 1:
+        tag_logic = st.radio("Coincidencia de etiquetas:", ["Contiene TODAS (AND)", "Contiene ALGUNA (OR)"], horizontal=True)
     
     search_term = st.text_input("Buscar texto libre", "")
 
@@ -311,9 +332,12 @@ if not df_all.empty:
         query += f" AND ciudad = '{selected_city}'"
         
     if selected_tags:
-        # Filtra si contiene cualquiera de las etiquetas seleccionadas
-        tag_conditions = " OR ".join([f"LOWER(tags) LIKE '%{t.lower()}%'" for t in selected_tags])
-        query += f" AND ({tag_conditions})"
+        if "TODAS" in tag_logic or tag_logic == "AND":
+            for t in selected_tags:
+                query += f" AND LOWER(tags) LIKE '%{t.lower()}%'"
+        else: # OR
+            tag_conditions = " OR ".join([f"LOWER(tags) LIKE '%{t.lower()}%'" for t in selected_tags])
+            query += f" AND ({tag_conditions})"
         
     if search_term:
         term = f"%{search_term.lower()}%"
@@ -333,8 +357,9 @@ else:
 # =====================================================================
 # 7. PESTAÑAS PRINCIPALES
 # =====================================================================
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📋 Tablero Kanban", 
+tab1, tab_bulk, tab2, tab3, tab4 = st.tabs([
+    "📋 Tablero Kanban",
+    "🏷️ Etiquetado Masivo",
     "📥 Ingesta Multicanal", 
     "💬 Mensajes & Contacto", 
     "📊 Analítica"
@@ -359,7 +384,6 @@ with tab1:
                     st.write(f"✉️ **Email:** {cand['email'] or 'Sin email'}")
                     st.write(f"📞 **Tel:** {cand['telefono'] or 'Sin tel'}")
                     
-                    # Mostrar etiquetas en formato badges
                     if cand['tags']:
                         badges_html = "".join([f"<span class='tag-badge'>🏷️ {t.strip()}</span>" for t in str(cand['tags']).split(',') if t.strip()])
                         st.markdown(badges_html, unsafe_allow_html=True)
@@ -375,7 +399,7 @@ with tab1:
                         st.rerun()
                         
                     with st.form(key=f"form_note_{cand['id']}"):
-                        t = st.text_input("Etiquetas (separadas por coma)", value=cand['tags'] or "", help="Ej: CABA, Equipo Alfa, Ventas, Turno Mañana")
+                        t = st.text_input("Etiquetas (separadas por coma)", value=cand['tags'] or "", help="Ej: Caba, 27/08, Equipo Alfa")
                         n = st.text_area("Notas del Reclutador", value=cand['notas'] or "")
                         if st.form_submit_button("Guardar"):
                             update_candidate_details(cand['id'], t, n)
@@ -385,24 +409,61 @@ with tab1:
                         with st.popover("📄 Ver Experiencia y Perfil"):
                             st.text_area("Detalle de Experiencia CompuTrabajo", value=cand['cv_texto'], height=300, disabled=True)
 
-# --- TAB 2: INGESTA MULTICANAL ---
+# --- TAB 2: ETIQUETADO MASIVO ---
+with tab_bulk:
+    st.subheader("🏷️ Asignación Masiva de Etiquetas")
+    st.caption("Aplica una o múltiples etiquetas a grupos enteros de candidatos a la vez.")
+    
+    col_b1, col_b2 = st.columns(2)
+    
+    with col_b1:
+        st.markdown("##### 1. Definir Etiquetas a Asignar")
+        bulk_tags_input = st.text_input(
+            "Etiquetas a aplicar (separadas por coma):",
+            placeholder="Ej: Caba, 27/08, Equipo Alfa, Convocatoria Mañana"
+        )
+        tag_mode = st.radio("Modo de asignación:", ["Añadir a las etiquetas existentes", "Reemplazar etiquetas existentes"], horizontal=True)
+        
+    with col_b2:
+        st.markdown("##### 2. Seleccionar Destinatarios")
+        target_selection = st.radio(
+            "Aplicar a:",
+            ["A los candidatos que coinciden con los filtros actuales", "A todos los candidatos de una etapa específica"]
+        )
+        
+        if target_selection == "A todos los candidatos de una etapa específica":
+            target_stage_bulk = st.selectbox("Selecciona la etapa:", STAGES, key="bulk_stage_target")
+            target_ids = df_all[df_all['etapa'] == target_stage_bulk]['id'].tolist() if not df_all.empty else []
+        else:
+            target_ids = filtered_df['id'].tolist() if not filtered_df.empty else []
+            
+        st.write(f"👥 Candidatos seleccionados para etiquetar: **{len(target_ids)}**")
+        
+    if st.button(f"🚀 Aplicar Etiquetas a los {len(target_ids)} Candidatos"):
+        if not bulk_tags_input.strip():
+            st.error("Ingresa al menos una etiqueta.")
+        elif not target_ids:
+            st.warning("No hay candidatos seleccionados.")
+        else:
+            with st.spinner("Actualizando etiquetas en Google Sheets..."):
+                apply_bulk_tags(target_ids, bulk_tags_input, mode="append" if "Añadir" in tag_mode else "overwrite")
+                st.success(f"¡Se asignaron las etiquetas '{bulk_tags_input}' a {len(target_ids)} candidatos!")
+                st.rerun()
+
+# --- TAB 3: INGESTA MULTICANAL ---
 with tab2:
     st.subheader("📥 Cargar Candidatos")
     mode = st.radio("Método", ["Planilla CompuTrabajo / Excel / CSV (Masivo)", "Individual Manual", "Lote de CVs (PDF)"], horizontal=True)
     
     if mode == "Planilla CompuTrabajo / Excel / CSV (Masivo)":
-        st.info("💡 Puedes asignar etiquetas automáticas de Equipo y Ciudad a todo el lote durante la importación.")
+        st.info("💡 Puedes ingresar etiquetas masivas que se aplicarán automáticamente a todos los candidatos de la planilla (ej: Caba, 27/08).")
         
-        col_tag1, col_tag2 = st.columns(2)
-        with col_tag1:
-            bulk_team = st.text_input("Asignar Etiqueta de Equipo a este lote (opcional):", placeholder="Ej: Equipo Alfa, Equipo Ventas")
-        with col_tag2:
-            bulk_city = st.text_input("Asignar Etiqueta de Zona/Ciudad a este lote (opcional):", placeholder="Ej: CABA, Ezeiza, Zona Norte")
+        bulk_upload_tags = st.text_input("Etiquetas adicionales para esta planilla (opcional):", placeholder="Ej: Caba, 27/08, Promotores")
             
         file = st.file_uploader("Sube tu archivo Excel (.xlsx) o CSV de CompuTrabajo", type=["xlsx", "xls", "csv"])
         if file:
             with st.spinner("Leyendo y procesando experiencias laborales..."):
-                clean_df = parse_computrabajo_or_generic_file(file, default_team_tag=bulk_team, default_city_tag=bulk_city)
+                clean_df = parse_computrabajo_or_generic_file(file, custom_bulk_tags=bulk_upload_tags)
                 st.write(f"📊 Candidatos detectados: **{len(clean_df)}**")
                 st.dataframe(clean_df[["nombre", "ciudad", "telefono", "tags", "email"]].head(10), use_container_width=True)
                 
@@ -422,7 +483,7 @@ with tab2:
             with c2:
                 city = st.text_input("Ciudad / Localidad", value="Buenos Aires")
                 stage = st.selectbox("Etapa Inicial", STAGES)
-                tags = st.text_input("Etiquetas (separadas por coma)", value="CABA, Equipo Alfa", help="Agrega etiquetas libres como ciudad, equipo, turno, etc.")
+                tags = st.text_input("Etiquetas (separadas por coma)", value="Caba, 27/08", help="Ej: Caba, 27/08, Turno Mañana")
             notes = st.text_area("Notas iniciales")
             if st.form_submit_button("Guardar Candidato"):
                 if name:
@@ -433,7 +494,7 @@ with tab2:
                     st.error("El nombre es obligatorio.")
 
     elif mode == "Lote de CVs (PDF)":
-        pdf_tags = st.text_input("Etiquetas para este lote de PDFs:", value="CV PDF, CABA")
+        pdf_tags = st.text_input("Etiquetas para este lote de PDFs:", value="CV PDF, Caba, 27/08")
         pdfs = st.file_uploader("Selecciona los archivos PDF", type=["pdf"], accept_multiple_files=True)
         if pdfs and st.button(f"Procesar y guardar {len(pdfs)} CVs"):
             parsed = []
@@ -463,7 +524,7 @@ with tab2:
             st.success("¡CVs procesados y guardados en Google Sheets!")
             st.rerun()
 
-# --- TAB 3: COMUNICACIONES ---
+# --- TAB 4: COMUNICACIONES ---
 with tab3:
     st.subheader("💬 Contactar Candidatos")
     target_stage = st.selectbox("Seleccionar etapa:", STAGES)
@@ -498,7 +559,7 @@ with tab3:
                 else:
                     st.caption("Sin email")
 
-# --- TAB 4: ANALÍTICA ---
+# --- TAB 5: ANALÍTICA ---
 with tab4:
     if not df_all.empty:
         con = duckdb.connect(database=':memory:')
