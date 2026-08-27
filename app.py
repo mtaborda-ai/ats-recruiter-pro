@@ -47,6 +47,13 @@ st.markdown("""
         border: 1px solid #e2e8f0;
         margin-bottom: 12px;
     }
+    .action-panel {
+        background-color: #f8fafc;
+        padding: 14px 18px;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        margin-bottom: 15px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -81,6 +88,9 @@ PASTEL_PALETTE = [
 
 if "tag_color_map" not in st.session_state:
     st.session_state["tag_color_map"] = {}
+
+if "selected_candidate_ids" not in st.session_state:
+    st.session_state["selected_candidate_ids"] = set()
 
 def get_tag_badge_html(tag_name: str) -> str:
     clean_tag = tag_name.strip()
@@ -147,7 +157,7 @@ def sync_data_to_sheet(df: pd.DataFrame):
         }
         resp = requests.post(API_URL, json=payload, timeout=60)
         if resp.status_code == 200:
-            st.toast("✅ Google Sheets actualizado.")
+            st.toast("✅ Google Sheets actualizado con éxito.")
         else:
             st.error(f"Error al guardar: {resp.text}")
     except requests.exceptions.Timeout:
@@ -178,10 +188,10 @@ def update_candidate_details(cand_id: int, tags: str, notas: str):
         df_all.loc[idx[0], "notas"] = notas
         sync_data_to_sheet(df_all)
 
-def apply_bulk_tags(candidate_ids: list, new_tags_str: str, mode: str = "append"):
+def apply_bulk_tags_operation(candidate_ids: list, tags_input: str, mode: str = "append"):
     global df_all
-    new_tags_list = [t.strip() for t in new_tags_str.split(",") if t.strip()]
-    if not new_tags_list:
+    tags_to_apply = [t.strip() for t in tags_input.split(",") if t.strip()]
+    if not tags_to_apply or not candidate_ids:
         return
         
     for cid in candidate_ids:
@@ -189,10 +199,13 @@ def apply_bulk_tags(candidate_ids: list, new_tags_str: str, mode: str = "append"
         if len(idx) > 0:
             current_tags = [t.strip() for t in str(df_all.loc[idx[0], "tags"]).split(",") if t.strip()]
             if mode == "append":
-                combined = list(dict.fromkeys(current_tags + new_tags_list))
+                combined = list(dict.fromkeys(current_tags + tags_to_apply))
                 df_all.loc[idx[0], "tags"] = ", ".join(combined)
-            else:
-                df_all.loc[idx[0], "tags"] = ", ".join(new_tags_list)
+            elif mode == "overwrite":
+                df_all.loc[idx[0], "tags"] = ", ".join(tags_to_apply)
+            elif mode == "remove":
+                filtered = [t for t in current_tags if t not in tags_to_apply]
+                df_all.loc[idx[0], "tags"] = ", ".join(filtered)
                 
     sync_data_to_sheet(df_all)
 
@@ -347,9 +360,9 @@ tab_kanban, tab_ingesta, tab_comms, tab_metrics = st.tabs([
     "📊 Analítica"
 ])
 
-# --- TAB 1: GESTIÓN DE CANDIDATOS (KANBAN + FILTROS + ETIQUETADO INTEGRADO) ---
+# --- TAB 1: GESTIÓN DE CANDIDATOS ---
 with tab_kanban:
-    # 1. BARRA DE FILTROS INTEGRADA
+    # 1. FILTROS SUPERIORES
     st.markdown("<div class='filter-card'>", unsafe_allow_html=True)
     col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
     
@@ -406,48 +419,95 @@ with tab_kanban:
     else:
         filtered_df = pd.DataFrame()
 
-    # 3. HERRAMIENTAS RÁPIDAS (ETIQUETADO MASIVO Y COLORES DENTRO DE GESTIÓN DE CANDIDATOS)
-    col_tools1, col_tools2 = st.columns(2)
+    # 3. PANEL DE SELECCIÓN Y ETIQUETADO MASIVO
+    st.markdown("<div class='action-panel'>", unsafe_allow_html=True)
+    st.markdown("##### 🎯 Selección y Etiquetado Masivo")
     
-    with col_tools1:
-        with st.expander("🏷️ Etiquetado Masivo a Candidatos Filtrados"):
-            st.caption(f"Aplica etiquetas a los **{len(filtered_df)}** candidatos actualmente visibles.")
-            bulk_tags_input = st.text_input("Etiquetas a agregar (separadas por coma):", placeholder="Ej: Caba, 27/08, Convocatoria Mañana")
-            bulk_tag_mode = st.radio("Modo:", ["Añadir a existentes", "Reemplazar existentes"], horizontal=True, key="mode_bulk_tab1")
-            
-            if st.button("🚀 Aplicar Etiquetas a Candidatos Filtrados"):
-                if not bulk_tags_input.strip():
-                    st.error("Ingresa al menos una etiqueta.")
-                elif filtered_df.empty:
-                    st.warning("No hay candidatos visibles con los filtros actuales.")
-                else:
-                    with st.spinner("Actualizando etiquetas..."):
-                        target_ids = filtered_df['id'].tolist()
-                        apply_bulk_tags(target_ids, bulk_tags_input, mode="append" if "Añadir" in bulk_tag_mode else "overwrite")
-                        st.success("¡Etiquetas actualizadas!")
-                        st.rerun()
+    col_sel1, col_sel2, col_sel3 = st.columns([3, 2, 2])
+    
+    with col_sel1:
+        candidate_options = {
+            f"{row['nombre']} ({row['ciudad']}) - #{row['id']}": row['id']
+            for _, row in filtered_df.iterrows()
+        } if not filtered_df.empty else {}
+        
+        selected_labels = st.multiselect(
+            "Seleccionar candidatos específicos:",
+            options=list(candidate_options.keys()),
+            placeholder="Busca por nombre o selecciona uno o varios..."
+        )
+        active_selected_ids = set([candidate_options[label] for label in selected_labels])
+        
+    with col_sel2:
+        st.write("")
+        st.write("")
+        col_btn_a, col_btn_b = st.columns(2)
+        with col_btn_a:
+            if st.button("✅ Marcar Todos Visibles"):
+                st.session_state["selected_candidate_ids"] = set(filtered_df["id"].tolist())
+                st.rerun()
+        with col_btn_b:
+            if st.button("❌ Desmarcar Todos"):
+                st.session_state["selected_candidate_ids"] = set()
+                st.rerun()
+                
+    with col_sel3:
+        valid_current_ids = set(filtered_df["id"].tolist()) if not filtered_df.empty else set()
+        total_selected_ids = active_selected_ids.union(st.session_state["selected_candidate_ids"].intersection(valid_current_ids))
+        st.metric("Candidatos Seleccionados", len(total_selected_ids))
 
-    with col_tools2:
-        with st.expander("🎨 Asignar / Personalizar Colores de Etiquetas"):
-            if sorted_tags:
-                col_c1, col_c2, col_c3 = st.columns(3)
-                with col_c1:
-                    tag_to_color = st.selectbox("Etiqueta:", sorted_tags, key="color_tag_picker_tab1")
-                with col_c2:
-                    chosen_color = st.color_picker("Color:", value="#2563eb", key="picker_color_val_tab1")
-                with col_c3:
-                    st.write("")
-                    st.write("")
-                    if st.button("Guardar Color"):
-                        st.session_state["tag_color_map"][tag_to_color] = chosen_color
-                        st.success("Guardado.")
-                        st.rerun()
+    col_tag_in, col_tag_act, col_tag_btn = st.columns([3, 2, 2])
+    with col_tag_in:
+        tags_to_apply = st.text_input(
+            "Etiquetas a aplicar a los seleccionados (separadas por coma):",
+            placeholder="Ej: Caba, 27/08, Equipo Alfa"
+        )
+    with col_tag_act:
+        tag_action = st.selectbox(
+            "Acción de etiquetado:",
+            ["Añadir a las etiquetas existentes", "Reemplazar etiquetas existentes", "Eliminar estas etiquetas"]
+        )
+    with col_tag_btn:
+        st.write("")
+        st.write("")
+        if st.button("🚀 Aplicar a la Selección"):
+            if not tags_to_apply.strip():
+                st.error("Escribe al menos una etiqueta.")
+            elif not total_selected_ids:
+                st.warning("Selecciona al menos un candidato.")
             else:
-                st.info("Aún no hay etiquetas registradas.")
+                with st.spinner("Actualizando etiquetas en Google Sheets..."):
+                    mode = "append"
+                    if "Reemplazar" in tag_action:
+                        mode = "overwrite"
+                    elif "Eliminar" in tag_action:
+                        mode = "remove"
+                        
+                    apply_bulk_tags_operation(list(total_selected_ids), tags_to_apply, mode=mode)
+                    st.success(f"¡Etiquetas actualizadas para {len(total_selected_ids)} candidatos!")
+                    st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 4. HERRAMIENTA PARA ASIGNAR COLORES A ETIQUETAS
+    with st.expander("🎨 Asignar / Personalizar Colores de Etiquetas"):
+        col_c1, col_c2, col_c3 = st.columns()
+        with col_c1:
+            tag_to_color = st.selectbox("Selecciona una Etiqueta:", options=sorted_tags if sorted_tags else ["Caba", "27/08"], key="color_tag_picker_tab1")
+        with col_c2:
+            current_c = st.session_state["tag_color_map"].get(tag_to_color, "#2563eb")
+            chosen_color = st.color_picker("Elegir Color:", value=current_c, key="picker_color_val_tab1")
+        with col_c3:
+            st.write("")
+            st.write("")
+            if st.button("💾 Guardar Color"):
+                st.session_state["tag_color_map"][tag_to_color] = chosen_color
+                st.success(f"Color guardado para '{tag_to_color}'.")
+                st.rerun()
 
     st.write(f"Mostrando **{len(filtered_df)}** candidatos.")
 
-    # 4. TABLERO KANBAN CON LAS 6 ETAPAS
+    # 5. TABLERO KANBAN CON LAS 6 ETAPAS
     cols = st.columns(6)
     for i, stage in enumerate(STAGES):
         with cols[i]:
@@ -460,7 +520,20 @@ with tab_kanban:
             )
             
             for _, cand in stage_cands.iterrows():
-                with st.expander(f"👤 {cand['nombre']}"):
+                is_selected = cand["id"] in total_selected_ids
+                with st.expander(f"{'✅ ' if is_selected else '👤 '}{cand['nombre']}"):
+                    chk = st.checkbox(
+                        "Seleccionar candidato",
+                        value=is_selected,
+                        key=f"chk_cand_{cand['id']}"
+                    )
+                    if chk != is_selected:
+                        if chk:
+                            st.session_state["selected_candidate_ids"].add(cand["id"])
+                        else:
+                            st.session_state["selected_candidate_ids"].discard(cand["id"])
+                        st.rerun()
+                        
                     st.write(f"📍 **Ubicación:** {cand['ciudad']}")
                     st.write(f"✉️ **Email:** {cand['email'] or 'Sin email'}")
                     st.write(f"📞 **Tel:** {cand['telefono'] or 'Sin tel'}")
@@ -577,7 +650,7 @@ with tab_comms:
     
     if not target_cands.empty:
         for _, c in target_cands.iterrows():
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3 = st.columns()
             msg = msg_template.format(nombre=c['nombre'], ciudad=c['ciudad'], etapa=c['etapa'])
             with c1:
                 st.markdown(f"**{c['nombre']}** ({c['ciudad']})")
