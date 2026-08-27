@@ -407,7 +407,7 @@ with tab_kanban:
         filtered_df = pd.DataFrame()
 
     # 3. HERRAMIENTAS RÁPIDAS
-    col_tools1, col_tools2 = st.columns(#)
+    col_tools1, col_tools2 = st.columns()
     
     with col_tools1:
         with st.expander("🏷️ Etiquetado Masivo a Candidatos Filtrados"):
