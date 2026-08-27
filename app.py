@@ -45,7 +45,7 @@ st.markdown("""
         padding: 14px 18px;
         border-radius: 8px;
         border: 1px solid #e2e8f0;
-        margin-bottom: 15px;
+        margin-bottom: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -68,16 +68,15 @@ STAGE_COLORS = {
     "Contratados": "#16a34a"
 }
 
-# Paleta base de colores para etiquetas automáticas
 PASTEL_PALETTE = [
-    {"bg": "#e0f2fe", "text": "#0369a1", "border": "#bae6fd"}, # Azul
-    {"bg": "#fef3c7", "text": "#b45309", "border": "#fde68a"}, # Ámbar/Amarillo
-    {"bg": "#dcfce7", "text": "#15803d", "border": "#bbf7d0"}, # Verde
-    {"bg": "#f3e8ff", "text": "#7e22ce", "border": "#e9d5ff"}, # Violeta
-    {"bg": "#ffe4e6", "text": "#be123c", "border": "#fecdd3"}, # Rosa
-    {"bg": "#ffedd5", "text": "#c2410c", "border": "#fed7aa"}, # Naranja
-    {"bg": "#ccfbf1", "text": "#0f766e", "border": "#99f6e4"}, # Turquesa
-    {"bg": "#f1f5f9", "text": "#334155", "border": "#cbd5e1"}, # Gris pizarra
+    {"bg": "#e0f2fe", "text": "#0369a1", "border": "#bae6fd"},
+    {"bg": "#fef3c7", "text": "#b45309", "border": "#fde68a"},
+    {"bg": "#dcfce7", "text": "#15803d", "border": "#bbf7d0"},
+    {"bg": "#f3e8ff", "text": "#7e22ce", "border": "#e9d5ff"},
+    {"bg": "#ffe4e6", "text": "#be123c", "border": "#fecdd3"},
+    {"bg": "#ffedd5", "text": "#c2410c", "border": "#fed7aa"},
+    {"bg": "#ccfbf1", "text": "#0f766e", "border": "#99f6e4"},
+    {"bg": "#f1f5f9", "text": "#334155", "border": "#cbd5e1"},
 ]
 
 if "tag_color_map" not in st.session_state:
@@ -87,13 +86,10 @@ def get_tag_badge_html(tag_name: str) -> str:
     clean_tag = tag_name.strip()
     if not clean_tag:
         return ""
-        
-    # Verificar si el usuario configuró un color manual
     if clean_tag in st.session_state["tag_color_map"]:
         custom_color = st.session_state["tag_color_map"][clean_tag]
         return f"<span class='tag-badge-custom' style='background-color: {custom_color}; color: #ffffff; border: 1px solid {custom_color};'>🏷️ {clean_tag}</span>"
         
-    # Generar color determinista basado en hash del nombre
     tag_hash = int(hashlib.md5(clean_tag.encode('utf-8')).hexdigest(), 16)
     palette = PASTEL_PALETTE[tag_hash % len(PASTEL_PALETTE)]
     return f"<span class='tag-badge-custom' style='background-color: {palette['bg']}; color: {palette['text']}; border: 1px solid {palette['border']};'>🏷️ {clean_tag}</span>"
@@ -317,7 +313,7 @@ def parse_computrabajo_or_generic_file(file, custom_bulk_tags="") -> pd.DataFram
     return clean
 
 # =====================================================================
-# 4. EXTRACCIÓN DE TODAS LAS ETIQUETAS ÚNICAS
+# 4. EXTRACCIÓN DE ETIQUETAS ÚNICAS
 # =====================================================================
 all_unique_tags = set()
 if not df_all.empty and "tags" in df_all.columns:
@@ -339,70 +335,46 @@ with st.sidebar:
         st.rerun()
         
     st.divider()
-    st.info(f"📊 Total de candidatos: **{len(df_all)}**")
-    st.caption("Filtra y gestiona los candidatos desde las pestañas superiores.")
+    st.metric("Total Candidatos", len(df_all))
 
 # =====================================================================
 # 6. PESTAÑAS PRINCIPALES
 # =====================================================================
-tab_kanban, tab_bulk, tab_ingesta, tab_comms, tab_metrics = st.tabs([
+tab_kanban, tab_ingesta, tab_comms, tab_metrics = st.tabs([
     "📋 Gestión de Candidatos",
-    "🏷️ Etiquetado Masivo",
     "📥 Ingesta Multicanal", 
     "💬 Mensajes & Contacto", 
     "📊 Analítica"
 ])
 
-# --- TAB 1: GESTIÓN DE CANDIDATOS (TABLERO KANBAN CON FILTRO DE ETIQUETAS) ---
+# --- TAB 1: GESTIÓN DE CANDIDATOS (KANBAN + FILTROS + ETIQUETADO INTEGRADO) ---
 with tab_kanban:
-    st.subheader("📋 Tablero de Gestión de Candidatos")
+    # 1. BARRA DE FILTROS INTEGRADA
+    st.markdown("<div class='filter-card'>", unsafe_allow_html=True)
+    col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
     
-    # 1. BARRA DE FILTROS INTEGRADA EN EL TABLERO
-    with st.container():
-        st.markdown("<div class='filter-card'>", unsafe_allow_html=True)
-        col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
+    with col_f1:
+        selected_tags = st.multiselect(
+            "🏷️ Filtrar por Etiquetas:",
+            options=sorted_tags,
+            placeholder="Ej: Caba, 27/08, Equipo Alfa"
+        )
         
-        with col_f1:
-            selected_tags = st.multiselect(
-                "🏷️ Filtrar por Etiquetas:",
-                options=sorted_tags,
-                placeholder="Selecciona una o más etiquetas (ej: Caba, 27/08)"
-            )
+    with col_f2:
+        tag_logic = "AND"
+        if len(selected_tags) > 1:
+            tag_logic = st.radio("Coincidencia:", ["Todas (AND)", "Alguna (OR)"], horizontal=True)
             
-        with col_f2:
-            tag_logic = "AND"
-            if len(selected_tags) > 1:
-                tag_logic = st.radio("Coincidencia de etiquetas:", ["Todas (AND)", "Alguna (OR)"], horizontal=True)
-                
-        with col_f3:
-            cities = ["Todas"] + sorted(list(df_all["ciudad"].replace("", "No especificada").unique())) if not df_all.empty else ["Todas"]
-            selected_city = st.selectbox("📍 Filtrar por Ubicación:", cities)
-            
-        with col_f4:
-            search_term = st.text_input("🔍 Buscar texto libre:", placeholder="Nombre, email, CV...")
-            
-        st.markdown("</div>", unsafe_allow_html=True)
+    with col_f3:
+        cities = ["Todas"] + sorted(list(df_all["ciudad"].replace("", "No especificada").unique())) if not df_all.empty else ["Todas"]
+        selected_city = st.selectbox("📍 Filtrar por Ubicación:", cities)
+        
+    with col_f4:
+        search_term = st.text_input("🔍 Buscar texto:", placeholder="Nombre, email, CV...")
+        
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    # 2. HERRAMIENTA PARA ASIGNAR COLORES A ETIQUETAS
-    with st.expander("🎨 Asignar / Personalizar Colores de Etiquetas"):
-        st.caption("Personaliza el color de fondo para que resalten tus etiquetas en el tablero.")
-        if sorted_tags:
-            col_c1, col_c2, col_c3 = st.columns()
-            with col_c1:
-                tag_to_color = st.selectbox("Seleccionar Etiqueta:", sorted_tags, key="color_tag_picker")
-            with col_c2:
-                chosen_color = st.color_picker("Elegir Color:", value="#2563eb", key="picker_color_val")
-            with col_c3:
-                st.write("")
-                st.write("")
-                if st.button("Guardar Color"):
-                    st.session_state["tag_color_map"][tag_to_color] = chosen_color
-                    st.success(f"Color asignado a '{tag_to_color}'.")
-                    st.rerun()
-        else:
-            st.info("Aún no hay etiquetas registradas.")
-
-    # 3. FILTRADO CON DUCKDB
+    # 2. MOTOR DE FILTRADO CON DUCKDB
     if not df_all.empty:
         con = duckdb.connect(database=':memory:')
         con.register('candidates', df_all)
@@ -434,9 +406,48 @@ with tab_kanban:
     else:
         filtered_df = pd.DataFrame()
 
-    st.caption(f"Mostrando **{len(filtered_df)}** candidatos según los filtros aplicados.")
+    # 3. HERRAMIENTAS RÁPIDAS (ETIQUETADO MASIVO Y COLORES DENTRO DE GESTIÓN DE CANDIDATOS)
+    col_tools1, col_tools2 = st.columns(2)
+    
+    with col_tools1:
+        with st.expander("🏷️ Etiquetado Masivo a Candidatos Filtrados"):
+            st.caption(f"Aplica etiquetas a los **{len(filtered_df)}** candidatos actualmente visibles.")
+            bulk_tags_input = st.text_input("Etiquetas a agregar (separadas por coma):", placeholder="Ej: Caba, 27/08, Convocatoria Mañana")
+            bulk_tag_mode = st.radio("Modo:", ["Añadir a existentes", "Reemplazar existentes"], horizontal=True, key="mode_bulk_tab1")
+            
+            if st.button("🚀 Aplicar Etiquetas a Candidatos Filtrados"):
+                if not bulk_tags_input.strip():
+                    st.error("Ingresa al menos una etiqueta.")
+                elif filtered_df.empty:
+                    st.warning("No hay candidatos visibles con los filtros actuales.")
+                else:
+                    with st.spinner("Actualizando etiquetas..."):
+                        target_ids = filtered_df['id'].tolist()
+                        apply_bulk_tags(target_ids, bulk_tags_input, mode="append" if "Añadir" in bulk_tag_mode else "overwrite")
+                        st.success("¡Etiquetas actualizadas!")
+                        st.rerun()
 
-    # 4. COLUMNAS KANBAN
+    with col_tools2:
+        with st.expander("🎨 Asignar / Personalizar Colores de Etiquetas"):
+            if sorted_tags:
+                col_c1, col_c2, col_c3 = st.columns()
+                with col_c1:
+                    tag_to_color = st.selectbox("Etiqueta:", sorted_tags, key="color_tag_picker_tab1")
+                with col_c2:
+                    chosen_color = st.color_picker("Color:", value="#2563eb", key="picker_color_val_tab1")
+                with col_c3:
+                    st.write("")
+                    st.write("")
+                    if st.button("Guardar Color"):
+                        st.session_state["tag_color_map"][tag_to_color] = chosen_color
+                        st.success("Guardado.")
+                        st.rerun()
+            else:
+                st.info("Aún no hay etiquetas registradas.")
+
+    st.write(f"Mostrando **{len(filtered_df)}** candidatos.")
+
+    # 4. TABLERO KANBAN CON LAS 6 ETAPAS
     cols = st.columns(6)
     for i, stage in enumerate(STAGES):
         with cols[i]:
@@ -454,7 +465,6 @@ with tab_kanban:
                     st.write(f"✉️ **Email:** {cand['email'] or 'Sin email'}")
                     st.write(f"📞 **Tel:** {cand['telefono'] or 'Sin tel'}")
                     
-                    # Mostrar etiquetas con colores asignados
                     if cand['tags']:
                         badges_html = "".join([get_tag_badge_html(t) for t in str(cand['tags']).split(',') if t.strip()])
                         st.markdown(badges_html, unsafe_allow_html=True)
@@ -470,7 +480,7 @@ with tab_kanban:
                         st.rerun()
                         
                     with st.form(key=f"form_note_{cand['id']}"):
-                        t = st.text_input("Etiquetas (separadas por coma)", value=cand['tags'] or "", help="Ej: Caba, 27/08, Equipo Alfa")
+                        t = st.text_input("Etiquetas", value=cand['tags'] or "", help="Ej: Caba, 27/08, Equipo Alfa")
                         n = st.text_area("Notas del Reclutador", value=cand['notas'] or "")
                         if st.form_submit_button("Guardar"):
                             update_candidate_details(cand['id'], t, n)
@@ -480,56 +490,14 @@ with tab_kanban:
                         with st.popover("📄 Ver Experiencia y Perfil"):
                             st.text_area("Detalle de Experiencia CompuTrabajo", value=cand['cv_texto'], height=300, disabled=True)
 
-# --- TAB 2: ETIQUETADO MASIVO ---
-with tab_bulk:
-    st.subheader("🏷️ Asignación Masiva de Etiquetas")
-    st.caption("Aplica una o múltiples etiquetas a grupos de candidatos al mismo tiempo.")
-    
-    col_b1, col_b2 = st.columns(2)
-    
-    with col_b1:
-        st.markdown("##### 1. Definir Etiquetas a Asignar")
-        bulk_tags_input = st.text_input(
-            "Etiquetas a aplicar (separadas por coma):",
-            placeholder="Ej: Caba, 27/08, Equipo Alfa, Convocatoria Mañana"
-        )
-        tag_mode = st.radio("Modo de asignación:", ["Añadir a las etiquetas existentes", "Reemplazar etiquetas existentes"], horizontal=True)
-        
-    with col_b2:
-        st.markdown("##### 2. Seleccionar Destinatarios")
-        target_selection = st.radio(
-            "Aplicar a:",
-            ["A los candidatos que coinciden con los filtros actuales", "A todos los candidatos de una etapa específica"]
-        )
-        
-        if target_selection == "A todos los candidatos de una etapa específica":
-            target_stage_bulk = st.selectbox("Selecciona la etapa:", STAGES, key="bulk_stage_target")
-            target_ids = df_all[df_all['etapa'] == target_stage_bulk]['id'].tolist() if not df_all.empty else []
-        else:
-            target_ids = filtered_df['id'].tolist() if not filtered_df.empty else []
-            
-        st.write(f"👥 Candidatos seleccionados para etiquetar: **{len(target_ids)}**")
-        
-    if st.button(f"🚀 Aplicar Etiquetas a los {len(target_ids)} Candidatos"):
-        if not bulk_tags_input.strip():
-            st.error("Ingresa al menos una etiqueta.")
-        elif not target_ids:
-            st.warning("No hay candidatos seleccionados.")
-        else:
-            with st.spinner("Actualizando etiquetas en Google Sheets..."):
-                apply_bulk_tags(target_ids, bulk_tags_input, mode="append" if "Añadir" in tag_mode else "overwrite")
-                st.success(f"¡Se asignaron las etiquetas '{bulk_tags_input}' a {len(target_ids)} candidatos!")
-                st.rerun()
-
-# --- TAB 3: INGESTA MULTICANAL ---
+# --- TAB 2: INGESTA MULTICANAL ---
 with tab_ingesta:
     st.subheader("📥 Cargar Candidatos")
     mode = st.radio("Método", ["Planilla CompuTrabajo / Excel / CSV (Masivo)", "Individual Manual", "Lote de CVs (PDF)"], horizontal=True)
     
     if mode == "Planilla CompuTrabajo / Excel / CSV (Masivo)":
-        st.info("💡 Puedes ingresar etiquetas masivas que se aplicarán automáticamente a todos los candidatos de la planilla (ej: Caba, 27/08).")
-        
-        bulk_upload_tags = st.text_input("Etiquetas adicionales para esta planilla (opcional):", placeholder="Ej: Caba, 27/08, Promotores")
+        st.info("💡 Puedes ingresar etiquetas que se aplicarán automáticamente a todos los candidatos de la planilla (ej: Caba, 27/08).")
+        bulk_upload_tags = st.text_input("Etiquetas para esta planilla (opcional):", placeholder="Ej: Caba, 27/08, Promotores")
             
         file = st.file_uploader("Sube tu archivo Excel (.xlsx) o CSV de CompuTrabajo", type=["xlsx", "xls", "csv"])
         if file:
@@ -595,7 +563,7 @@ with tab_ingesta:
             st.success("¡CVs procesados y guardados en Google Sheets!")
             st.rerun()
 
-# --- TAB 4: COMUNICACIONES ---
+# --- TAB 3: COMUNICACIONES ---
 with tab_comms:
     st.subheader("💬 Contactar Candidatos")
     target_stage = st.selectbox("Seleccionar etapa:", STAGES)
@@ -630,7 +598,7 @@ with tab_comms:
                 else:
                     st.caption("Sin email")
 
-# --- TAB 5: ANALÍTICA ---
+# --- TAB 4: ANALÍTICA ---
 with tab_metrics:
     if not df_all.empty:
         con = duckdb.connect(database=':memory:')
