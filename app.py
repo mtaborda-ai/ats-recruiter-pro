@@ -10,6 +10,16 @@ import requests
 import streamlit as st
 
 # =====================================================================
+# BLINDAJE TOTAL ANTI-ERROR PARA st.columns
+# =====================================================================
+_orig_columns = st.columns
+def _safe_columns(spec=3, *args, **kwargs):
+    if spec is None or spec == () or spec == []:
+        spec = 3
+    return _orig_columns(spec, *args, **kwargs)
+st.columns = _safe_columns
+
+# =====================================================================
 # 1. CONFIGURACIÓN Y ESTILOS
 # =====================================================================
 st.set_page_config(
@@ -347,7 +357,7 @@ tab_kanban, tab_ingesta, tab_comms, tab_metrics = st.tabs([
     "📊 Analítica"
 ])
 
-# --- TAB 1: GESTIÓN DE CANDIDATOS ---
+# --- TAB 1: GESTIÓN DE CANDIDATOS (KANBAN + FILTROS + ETIQUETADO INTEGRADO) ---
 with tab_kanban:
     # 1. BARRA DE FILTROS INTEGRADA
     st.markdown("<div class='filter-card'>", unsafe_allow_html=True)
@@ -406,8 +416,8 @@ with tab_kanban:
     else:
         filtered_df = pd.DataFrame()
 
-    # 3. HERRAMIENTAS RÁPIDAS
-    col_tools1, col_tools2 = st.columns(3)
+    # 3. HERRAMIENTAS RÁPIDAS (ETIQUETADO MASIVO Y COLORES DENTRO DE GESTIÓN DE CANDIDATOS)
+    col_tools1, col_tools2 = st.columns()
     
     with col_tools1:
         with st.expander("🏷️ Etiquetado Masivo a Candidatos Filtrados"):
@@ -447,8 +457,8 @@ with tab_kanban:
 
     st.write(f"Mostrando **{len(filtered_df)}** candidatos.")
 
-    # 4. TABLERO KANBAN
-    cols = st.columns(6)
+    # 4. TABLERO KANBAN CON LAS 6 ETAPAS
+    cols = st.columns()
     for i, stage in enumerate(STAGES):
         with cols[i]:
             stage_cands = filtered_df[filtered_df['etapa'] == stage] if not filtered_df.empty else pd.DataFrame()
@@ -496,122 +506,3 @@ with tab_ingesta:
     mode = st.radio("Método", ["Planilla CompuTrabajo / Excel / CSV (Masivo)", "Individual Manual", "Lote de CVs (PDF)"], horizontal=True)
     
     if mode == "Planilla CompuTrabajo / Excel / CSV (Masivo)":
-        st.info("💡 Puedes ingresar etiquetas que se aplicarán automáticamente a todos los candidatos de la planilla (ej: Caba, 27/08).")
-        bulk_upload_tags = st.text_input("Etiquetas para esta planilla (opcional):", placeholder="Ej: Caba, 27/08, Promotores")
-            
-        file = st.file_uploader("Sube tu archivo Excel (.xlsx) o CSV de CompuTrabajo", type=["xlsx", "xls", "csv"])
-        if file:
-            with st.spinner("Leyendo y procesando experiencias laborales..."):
-                clean_df = parse_computrabajo_or_generic_file(file, custom_bulk_tags=bulk_upload_tags)
-                st.write(f"📊 Candidatos detectados: **{len(clean_df)}**")
-                st.dataframe(clean_df[["nombre", "ciudad", "telefono", "tags", "email"]].head(10), use_container_width=True)
-                
-                if st.button(f"Confirmar e Importar {len(clean_df)} Candidatos a Google Sheets"):
-                    with st.spinner("Guardando en Google Sheets..."):
-                        insert_batch(clean_df)
-                        st.success("¡Importación masiva completada con éxito!")
-                        st.rerun()
-
-    elif mode == "Individual Manual":
-        with st.form("manual_add_form"):
-            c1, c2 = st.columns()
-            with c1:
-                name = st.text_input("Nombre y Apellido *")
-                email = st.text_input("Correo")
-                phone = st.text_input("Teléfono")
-            with c2:
-                city = st.text_input("Ciudad / Localidad", value="Buenos Aires")
-                stage = st.selectbox("Etapa Inicial", STAGES)
-                tags = st.text_input("Etiquetas (separadas por coma)", value="Caba, 27/08", help="Ej: Caba, 27/08, Turno Mañana")
-            notes = st.text_area("Notas iniciales")
-            if st.form_submit_button("Guardar Candidato"):
-                if name:
-                    insert_single(name, email, phone, city, stage, tags, notes)
-                    st.success(f"Candidato {name} agregado a Google Sheets.")
-                    st.rerun()
-                else:
-                    st.error("El nombre es obligatorio.")
-
-    elif mode == "Lote de CVs (PDF)":
-        pdf_tags = st.text_input("Etiquetas para este lote de PDFs:", value="CV PDF, Caba, 27/08")
-        pdfs = st.file_uploader("Selecciona los archivos PDF", type=["pdf"], accept_multiple_files=True)
-        if pdfs and st.button(f"Procesar y guardar {len(pdfs)} CVs"):
-            parsed = []
-            progress = st.progress(0)
-            for i, p in enumerate(pdfs):
-                txt = ""
-                with pdfplumber.open(p) as pdf:
-                    for page in pdf.pages:
-                        extracted = page.extract_text()
-                        if extracted: txt += extracted + "\n"
-                
-                email_m = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', txt)
-                phone_m = re.search(r'(\+?\d{1,3}[\s-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}', txt)
-                
-                parsed.append({
-                    "nombre": p.name.replace(".pdf", "").replace("_", " ").title(),
-                    "email": email_m.group(0) if email_m else "",
-                    "telefono": phone_m.group(0) if phone_m else "",
-                    "ciudad": "No especificada",
-                    "etapa": "Sin gestionar",
-                    "tags": pdf_tags,
-                    "notas": "",
-                    "cv_texto": txt[:3000]
-                })
-                progress.progress((i + 1) / len(pdfs))
-            insert_batch(pd.DataFrame(parsed))
-            st.success("¡CVs procesados y guardados en Google Sheets!")
-            st.rerun()
-
-# --- TAB 3: COMUNICACIONES ---
-with tab_comms:
-    st.subheader("💬 Contactar Candidatos")
-    target_stage = st.selectbox("Seleccionar etapa:", STAGES)
-    msg_template = st.text_area(
-        "Plantilla del mensaje:",
-        "¡Hola {nombre}! Te contactamos respecto a tu postulación en {ciudad} para coordinar el paso a la etapa de '{etapa}'."
-    )
-    
-    target_cands = filtered_df[filtered_df['etapa'] == target_stage] if not filtered_df.empty else pd.DataFrame()
-    st.write(f"Candidatos en esta etapa (filtrados): **{len(target_cands)}**")
-    
-    if not target_cands.empty:
-        for _, c in target_cands.iterrows():
-            c1, c2, c3 = st.columns()
-            msg = msg_template.format(nombre=c['nombre'], ciudad=c['ciudad'], etapa=c['etapa'])
-            with c1:
-                st.markdown(f"**{c['nombre']}** ({c['ciudad']})")
-                if c['tags']:
-                    badges_html = "".join([get_tag_badge_html(t) for t in str(c['tags']).split(',') if t.strip()])
-                    st.markdown(badges_html, unsafe_allow_html=True)
-            with c2:
-                if c['telefono']:
-                    clean_phone = re.sub(r'[^0-9]', '', str(c['telefono']))
-                    wa_url = f"https://wa.me/{clean_phone}?text={urllib.parse.quote(msg)}"
-                    st.link_button("📱 WhatsApp", wa_url)
-                else:
-                    st.caption("Sin teléfono")
-            with c3:
-                if c['email']:
-                    mail_url = f"mailto:{c['email']}?subject=Proceso de Selección&body={urllib.parse.quote(msg)}"
-                    st.link_button("✉️ Correo", mail_url)
-                else:
-                    st.caption("Sin email")
-
-# --- TAB 4: ANALÍTICA ---
-with tab_metrics:
-    if not df_all.empty:
-        con = duckdb.connect(database=':memory:')
-        con.register('df', df_all)
-        c1, c2 = st.columns()
-        with c1:
-            st.markdown("##### Distribución por Etapa")
-            m_stage = con.execute("SELECT etapa, COUNT(*) as total FROM df GROUP BY etapa").df()
-            st.bar_chart(m_stage.set_index("etapa"))
-        with c2:
-            st.markdown("##### Distribución por Ubicación / Barrio")
-            m_city = con.execute("SELECT ciudad, COUNT(*) as total FROM df GROUP BY ciudad LIMIT 8").df()
-            st.bar_chart(m_city.set_index("ciudad"))
-        con.close()
-    else:
-        st.info("Sin datos cargados.")
