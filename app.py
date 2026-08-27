@@ -65,7 +65,7 @@ def load_data() -> pd.DataFrame:
             "etapa", "tags", "notas", "cv_texto", "fecha_creacion"
         ])
     try:
-        resp = requests.get(API_URL, timeout=15)
+        resp = requests.get(API_URL, timeout=60)
         if resp.status_code == 200:
             data = resp.json()
             df = pd.DataFrame(data)
@@ -83,8 +83,11 @@ def load_data() -> pd.DataFrame:
                         df[col] = df[col].fillna("").astype(str)
             return df
         else:
-            st.error(f"Error de conexión con Google Sheets (HTTP {resp.status_code})")
+            st.error(f"Error al conectar con Google Sheets (HTTP {resp.status_code})")
             return pd.DataFrame()
+    except requests.exceptions.Timeout:
+        st.warning("⚠️ Google Sheets tardó en responder. Haz clic en 'Recargar datos' en la barra lateral.")
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"Error al cargar datos: {e}")
         return pd.DataFrame()
@@ -98,11 +101,13 @@ def sync_data_to_sheet(df: pd.DataFrame):
             "action": "sync_all",
             "data": df.to_dict(orient="records")
         }
-        resp = requests.post(API_URL, json=payload, timeout=25)
+        resp = requests.post(API_URL, json=payload, timeout=60)
         if resp.status_code == 200:
-            st.toast("✅ Google Sheets actualizado.")
+            st.toast("✅ Google Sheets actualizado con éxito.")
         else:
             st.error(f"Error al guardar: {resp.text}")
+    except requests.exceptions.Timeout:
+        st.warning("⚠️ La sincronización se está completando en segundo plano.")
     except Exception as e:
         st.error(f"Error de sincronización: {e}")
 
@@ -156,11 +161,10 @@ def insert_batch(new_records_df: pd.DataFrame):
     sync_data_to_sheet(df_all)
 
 # =====================================================================
-# 3. PARSER INTELIGENTE DE EXCEL / CSV (COMPUTRABAJO & GENERAL)
+# 3. PARSER DE EXCEL / CSV (COMPUTRABAJO & GENERAL)
 # =====================================================================
 def parse_computrabajo_or_generic_file(file) -> pd.DataFrame:
     file.seek(0)
-    # 1. Leer primeras filas para evaluar si el encabezado está en fila 0 o 1
     if file.name.endswith('.csv'):
         df_preview = pd.read_csv(file, nrows=5)
     else:
@@ -171,7 +175,6 @@ def parse_computrabajo_or_generic_file(file) -> pd.DataFrame:
     has_email_0 = any('mail' in c or 'correo' in c for c in cols_0)
     
     file.seek(0)
-    # Si no tiene nombre y email en fila 0, lee con header=1 (formato CompuTrabajo)
     if not (has_name_0 and has_email_0):
         if file.name.endswith('.csv'):
             df_raw = pd.read_csv(file, header=1)
@@ -183,19 +186,14 @@ def parse_computrabajo_or_generic_file(file) -> pd.DataFrame:
         else:
             df_raw = pd.read_excel(file)
             
-    # Mapeo de columnas con DuckDB y Pandas
     cols_map = {str(c).lower().strip(): c for c in df_raw.columns}
     
-    # Nombre y Apellido
     name_c = next((cols_map[c] for c in cols_map if c == 'nombre' or 'primer nombre' in c), None)
     surname_c = next((cols_map[c] for c in cols_map if 'apellido' in c), None)
-    
-    # Datos de Contacto y Ubicación
     email_c = next((cols_map[c] for c in cols_map if 'mail' in c or 'correo' in c), None)
     phone_c = next((cols_map[c] for c in cols_map if 'tel' in c or 'cel' in c or 'phone' in c or 'whatsapp' in c), None)
     city_c = next((cols_map[c] for c in cols_map if 'direcc' in c or 'ciu' in c or 'localidad' in c or 'city' in c), None)
     
-    # Datos Laborales y Perfil
     title_c = next((cols_map[c] for c in cols_map if 'título del cv' in c or 'titulo del cv' in c or 'puesto' in c), None)
     exp_c = next((cols_map[c] for c in cols_map if 'experiencia profesional' in c or 'experiencia' in c), None)
     desc_c = next((cols_map[c] for c in cols_map if 'descripción profesional' in c or 'descripcion' in c or 'perfil' in c), None)
@@ -205,7 +203,6 @@ def parse_computrabajo_or_generic_file(file) -> pd.DataFrame:
     
     clean = pd.DataFrame()
     
-    # Construcción del Nombre Completo
     if name_c and surname_c:
         clean['nombre'] = (df_raw[name_c].fillna('').astype(str).str.strip() + " " + df_raw[surname_c].fillna('').astype(str).str.strip()).str.strip()
     elif name_c:
@@ -218,7 +215,6 @@ def parse_computrabajo_or_generic_file(file) -> pd.DataFrame:
     clean['ciudad'] = df_raw[city_c].fillna('No especificada').astype(str).str.strip() if city_c else "No especificada"
     clean['etapa'] = "Sin gestionar"
     
-    # Generación de Etiquetas automáticas
     tags_list = []
     for _, row in df_raw.iterrows():
         t_items = []
@@ -230,7 +226,6 @@ def parse_computrabajo_or_generic_file(file) -> pd.DataFrame:
     clean['tags'] = tags_list
     clean['notas'] = ""
     
-    # Formateo detallado del texto del CV (Experiencia + Perfil + Preguntas)
     cv_texts = []
     for _, row in df_raw.iterrows():
         parts = []
@@ -260,12 +255,12 @@ with st.sidebar:
     st.title("💼 ATS Cloud")
     st.caption("Base de datos sincronizada con Google Sheets.")
     
-    if st.button("🔄 Recargar datos desde Drive"):
+    if st.button("🔄 Recargar datos"):
         st.rerun()
         
     st.divider()
     cities = ["Todas"] + sorted(list(df_all["ciudad"].replace("", "No especificada").unique())) if not df_all.empty else ["Todas"]
-    selected_city = st.selectbox("Filtrar por Ciudad / Barrio", cities)
+    selected_city = st.selectbox("Filtrar por Ubicación / Barrio", cities)
     search_term = st.text_input("Buscar (Nombre / Email / Tag / Exp)", "")
 
 # =====================================================================
@@ -338,7 +333,6 @@ with tab1:
                             update_candidate_details(cand['id'], t, n)
                             st.rerun()
                             
-                    # Visualización de Experiencia y CV
                     if cand['cv_texto']:
                         with st.popover("📄 Ver Experiencia y Perfil"):
                             st.text_area("Detalle de Experiencia CompuTrabajo", value=cand['cv_texto'], height=300, disabled=True)
