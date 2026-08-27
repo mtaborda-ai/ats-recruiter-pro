@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 import urllib.parse
@@ -29,17 +30,22 @@ st.markdown("""
         margin-bottom: 8px;
     }
     .stButton>button { border-radius: 6px; font-weight: 500; }
-    .tag-badge {
-        background-color: #e0f2fe;
-        color: #0369a1;
-        padding: 2px 8px;
-        border-radius: 12px;
+    .tag-badge-custom {
+        padding: 3px 10px;
+        border-radius: 14px;
         font-size: 11px;
         font-weight: 600;
         margin-right: 4px;
         margin-bottom: 4px;
         display: inline-block;
-        border: 1px solid #bae6fd;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+    .filter-card {
+        background-color: #ffffff;
+        padding: 14px 18px;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 15px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -61,6 +67,36 @@ STAGE_COLORS = {
     "Entrevista individual": "#0891b2",
     "Contratados": "#16a34a"
 }
+
+# Paleta base de colores para etiquetas automáticas
+PASTEL_PALETTE = [
+    {"bg": "#e0f2fe", "text": "#0369a1", "border": "#bae6fd"}, # Azul
+    {"bg": "#fef3c7", "text": "#b45309", "border": "#fde68a"}, # Ámbar/Amarillo
+    {"bg": "#dcfce7", "text": "#15803d", "border": "#bbf7d0"}, # Verde
+    {"bg": "#f3e8ff", "text": "#7e22ce", "border": "#e9d5ff"}, # Violeta
+    {"bg": "#ffe4e6", "text": "#be123c", "border": "#fecdd3"}, # Rosa
+    {"bg": "#ffedd5", "text": "#c2410c", "border": "#fed7aa"}, # Naranja
+    {"bg": "#ccfbf1", "text": "#0f766e", "border": "#99f6e4"}, # Turquesa
+    {"bg": "#f1f5f9", "text": "#334155", "border": "#cbd5e1"}, # Gris pizarra
+]
+
+if "tag_color_map" not in st.session_state:
+    st.session_state["tag_color_map"] = {}
+
+def get_tag_badge_html(tag_name: str) -> str:
+    clean_tag = tag_name.strip()
+    if not clean_tag:
+        return ""
+        
+    # Verificar si el usuario configuró un color manual
+    if clean_tag in st.session_state["tag_color_map"]:
+        custom_color = st.session_state["tag_color_map"][clean_tag]
+        return f"<span class='tag-badge-custom' style='background-color: {custom_color}; color: #ffffff; border: 1px solid {custom_color};'>🏷️ {clean_tag}</span>"
+        
+    # Generar color determinista basado en hash del nombre
+    tag_hash = int(hashlib.md5(clean_tag.encode('utf-8')).hexdigest(), 16)
+    palette = PASTEL_PALETTE[tag_hash % len(PASTEL_PALETTE)]
+    return f"<span class='tag-badge-custom' style='background-color: {palette['bg']}; color: {palette['text']}; border: 1px solid {palette['border']};'>🏷️ {clean_tag}</span>"
 
 # =====================================================================
 # 2. CONEXIÓN CON GOOGLE SHEETS
@@ -115,11 +151,11 @@ def sync_data_to_sheet(df: pd.DataFrame):
         }
         resp = requests.post(API_URL, json=payload, timeout=60)
         if resp.status_code == 200:
-            st.toast("✅ Google Sheets actualizado con éxito.")
+            st.toast("✅ Google Sheets actualizado.")
         else:
             st.error(f"Error al guardar: {resp.text}")
     except requests.exceptions.Timeout:
-        st.warning("⚠️ La sincronización se está completando en segundo plano en Google Drive.")
+        st.warning("⚠️ La sincronización se está completando en segundo plano.")
     except Exception as e:
         st.error(f"Error de sincronización: {e}")
 
@@ -147,7 +183,6 @@ def update_candidate_details(cand_id: int, tags: str, notas: str):
         sync_data_to_sheet(df_all)
 
 def apply_bulk_tags(candidate_ids: list, new_tags_str: str, mode: str = "append"):
-    """Aplica etiquetas masivamente a una lista de IDs de candidatos."""
     global df_all
     new_tags_list = [t.strip() for t in new_tags_str.split(",") if t.strip()]
     if not new_tags_list:
@@ -158,10 +193,9 @@ def apply_bulk_tags(candidate_ids: list, new_tags_str: str, mode: str = "append"
         if len(idx) > 0:
             current_tags = [t.strip() for t in str(df_all.loc[idx[0], "tags"]).split(",") if t.strip()]
             if mode == "append":
-                # Une y elimina duplicados manteniendo el orden
                 combined = list(dict.fromkeys(current_tags + new_tags_list))
                 df_all.loc[idx[0], "tags"] = ", ".join(combined)
-            else: # overwrite
+            else:
                 df_all.loc[idx[0], "tags"] = ", ".join(new_tags_list)
                 
     sync_data_to_sheet(df_all)
@@ -247,7 +281,6 @@ def parse_computrabajo_or_generic_file(file, custom_bulk_tags="") -> pd.DataFram
     clean['ciudad'] = df_raw[city_c].fillna('No especificada').astype(str).str.strip() if city_c else "No especificada"
     clean['etapa'] = "Sin gestionar"
     
-    # Preparar tags personalizados iniciales
     extra_tags = [t.strip() for t in custom_bulk_tags.split(",") if t.strip()]
     
     tags_list = []
@@ -296,77 +329,114 @@ if not df_all.empty and "tags" in df_all.columns:
 sorted_tags = sorted(list(all_unique_tags))
 
 # =====================================================================
-# 5. BARRA LATERAL (FILTROS MULTI-ETIQUETA)
+# 5. BARRA LATERAL
 # =====================================================================
 with st.sidebar:
     st.title("💼 ATS Cloud")
-    st.caption("Filtros y Sincronización en Tiempo Real.")
+    st.caption("Base de datos sincronizada con Google Sheets.")
     
-    if st.button("🔄 Recargar datos"):
+    if st.button("🔄 Recargar datos de Google Sheets"):
         st.rerun()
         
     st.divider()
-    st.subheader("🔍 Filtros de Búsqueda")
-    
-    cities = ["Todas"] + sorted(list(df_all["ciudad"].replace("", "No especificada").unique())) if not df_all.empty else ["Todas"]
-    selected_city = st.selectbox("Filtrar por Ubicación / Barrio", cities)
-    
-    # Filtro multi-etiqueta
-    selected_tags = st.multiselect("🏷️ Filtrar por Etiquetas (ej: Caba, 27/08)", options=sorted_tags)
-    
-    tag_logic = "AND"
-    if len(selected_tags) > 1:
-        tag_logic = st.radio("Coincidencia de etiquetas:", ["Contiene TODAS (AND)", "Contiene ALGUNA (OR)"], horizontal=True)
-    
-    search_term = st.text_input("Buscar texto libre", "")
+    st.info(f"📊 Total de candidatos: **{len(df_all)}**")
+    st.caption("Filtra y gestiona los candidatos desde las pestañas superiores.")
 
 # =====================================================================
-# 6. MOTOR DE FILTRADO CON DUCKDB
+# 6. PESTAÑAS PRINCIPALES
 # =====================================================================
-if not df_all.empty:
-    con = duckdb.connect(database=':memory:')
-    con.register('candidates', df_all)
-    query = "SELECT * FROM candidates WHERE 1=1"
-    
-    if selected_city != "Todas":
-        query += f" AND ciudad = '{selected_city}'"
-        
-    if selected_tags:
-        if "TODAS" in tag_logic or tag_logic == "AND":
-            for t in selected_tags:
-                query += f" AND LOWER(tags) LIKE '%{t.lower()}%'"
-        else: # OR
-            tag_conditions = " OR ".join([f"LOWER(tags) LIKE '%{t.lower()}%'" for t in selected_tags])
-            query += f" AND ({tag_conditions})"
-        
-    if search_term:
-        term = f"%{search_term.lower()}%"
-        query += f""" AND (
-            LOWER(nombre) LIKE '{term}' OR 
-            LOWER(email) LIKE '{term}' OR 
-            LOWER(tags) LIKE '{term}' OR 
-            LOWER(cv_texto) LIKE '{term}' OR
-            LOWER(notas) LIKE '{term}'
-        )"""
-        
-    filtered_df = con.execute(query).df()
-    con.close()
-else:
-    filtered_df = pd.DataFrame()
-
-# =====================================================================
-# 7. PESTAÑAS PRINCIPALES
-# =====================================================================
-tab1, tab_bulk, tab2, tab3, tab4 = st.tabs([
-    "📋 Tablero Kanban",
+tab_kanban, tab_bulk, tab_ingesta, tab_comms, tab_metrics = st.tabs([
+    "📋 Gestión de Candidatos",
     "🏷️ Etiquetado Masivo",
     "📥 Ingesta Multicanal", 
     "💬 Mensajes & Contacto", 
     "📊 Analítica"
 ])
 
-# --- TAB 1: KANBAN ---
-with tab1:
+# --- TAB 1: GESTIÓN DE CANDIDATOS (TABLERO KANBAN CON FILTRO DE ETIQUETAS) ---
+with tab_kanban:
+    st.subheader("📋 Tablero de Gestión de Candidatos")
+    
+    # 1. BARRA DE FILTROS INTEGRADA EN EL TABLERO
+    with st.container():
+        st.markdown("<div class='filter-card'>", unsafe_allow_html=True)
+        col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
+        
+        with col_f1:
+            selected_tags = st.multiselect(
+                "🏷️ Filtrar por Etiquetas:",
+                options=sorted_tags,
+                placeholder="Selecciona una o más etiquetas (ej: Caba, 27/08)"
+            )
+            
+        with col_f2:
+            tag_logic = "AND"
+            if len(selected_tags) > 1:
+                tag_logic = st.radio("Coincidencia de etiquetas:", ["Todas (AND)", "Alguna (OR)"], horizontal=True)
+                
+        with col_f3:
+            cities = ["Todas"] + sorted(list(df_all["ciudad"].replace("", "No especificada").unique())) if not df_all.empty else ["Todas"]
+            selected_city = st.selectbox("📍 Filtrar por Ubicación:", cities)
+            
+        with col_f4:
+            search_term = st.text_input("🔍 Buscar texto libre:", placeholder="Nombre, email, CV...")
+            
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 2. HERRAMIENTA PARA ASIGNAR COLORES A ETIQUETAS
+    with st.expander("🎨 Asignar / Personalizar Colores de Etiquetas"):
+        st.caption("Personaliza el color de fondo para que resalten tus etiquetas en el tablero.")
+        if sorted_tags:
+            col_c1, col_c2, col_c3 = st.columns()
+            with col_c1:
+                tag_to_color = st.selectbox("Seleccionar Etiqueta:", sorted_tags, key="color_tag_picker")
+            with col_c2:
+                chosen_color = st.color_picker("Elegir Color:", value="#2563eb", key="picker_color_val")
+            with col_c3:
+                st.write("")
+                st.write("")
+                if st.button("Guardar Color"):
+                    st.session_state["tag_color_map"][tag_to_color] = chosen_color
+                    st.success(f"Color asignado a '{tag_to_color}'.")
+                    st.rerun()
+        else:
+            st.info("Aún no hay etiquetas registradas.")
+
+    # 3. FILTRADO CON DUCKDB
+    if not df_all.empty:
+        con = duckdb.connect(database=':memory:')
+        con.register('candidates', df_all)
+        query = "SELECT * FROM candidates WHERE 1=1"
+        
+        if selected_city != "Todas":
+            query += f" AND ciudad = '{selected_city}'"
+            
+        if selected_tags:
+            if "Todas" in tag_logic or tag_logic == "AND":
+                for t in selected_tags:
+                    query += f" AND LOWER(tags) LIKE '%{t.lower()}%'"
+            else: # OR
+                tag_conditions = " OR ".join([f"LOWER(tags) LIKE '%{t.lower()}%'" for t in selected_tags])
+                query += f" AND ({tag_conditions})"
+            
+        if search_term:
+            term = f"%{search_term.lower()}%"
+            query += f""" AND (
+                LOWER(nombre) LIKE '{term}' OR 
+                LOWER(email) LIKE '{term}' OR 
+                LOWER(tags) LIKE '{term}' OR 
+                LOWER(cv_texto) LIKE '{term}' OR
+                LOWER(notas) LIKE '{term}'
+            )"""
+            
+        filtered_df = con.execute(query).df()
+        con.close()
+    else:
+        filtered_df = pd.DataFrame()
+
+    st.caption(f"Mostrando **{len(filtered_df)}** candidatos según los filtros aplicados.")
+
+    # 4. COLUMNAS KANBAN
     cols = st.columns(6)
     for i, stage in enumerate(STAGES):
         with cols[i]:
@@ -384,8 +454,9 @@ with tab1:
                     st.write(f"✉️ **Email:** {cand['email'] or 'Sin email'}")
                     st.write(f"📞 **Tel:** {cand['telefono'] or 'Sin tel'}")
                     
+                    # Mostrar etiquetas con colores asignados
                     if cand['tags']:
-                        badges_html = "".join([f"<span class='tag-badge'>🏷️ {t.strip()}</span>" for t in str(cand['tags']).split(',') if t.strip()])
+                        badges_html = "".join([get_tag_badge_html(t) for t in str(cand['tags']).split(',') if t.strip()])
                         st.markdown(badges_html, unsafe_allow_html=True)
                     
                     new_st = st.selectbox(
@@ -412,7 +483,7 @@ with tab1:
 # --- TAB 2: ETIQUETADO MASIVO ---
 with tab_bulk:
     st.subheader("🏷️ Asignación Masiva de Etiquetas")
-    st.caption("Aplica una o múltiples etiquetas a grupos enteros de candidatos a la vez.")
+    st.caption("Aplica una o múltiples etiquetas a grupos de candidatos al mismo tiempo.")
     
     col_b1, col_b2 = st.columns(2)
     
@@ -451,7 +522,7 @@ with tab_bulk:
                 st.rerun()
 
 # --- TAB 3: INGESTA MULTICANAL ---
-with tab2:
+with tab_ingesta:
     st.subheader("📥 Cargar Candidatos")
     mode = st.radio("Método", ["Planilla CompuTrabajo / Excel / CSV (Masivo)", "Individual Manual", "Lote de CVs (PDF)"], horizontal=True)
     
@@ -525,7 +596,7 @@ with tab2:
             st.rerun()
 
 # --- TAB 4: COMUNICACIONES ---
-with tab3:
+with tab_comms:
     st.subheader("💬 Contactar Candidatos")
     target_stage = st.selectbox("Seleccionar etapa:", STAGES)
     msg_template = st.text_area(
@@ -543,7 +614,7 @@ with tab3:
             with c1:
                 st.markdown(f"**{c['nombre']}** ({c['ciudad']})")
                 if c['tags']:
-                    badges_html = "".join([f"<span class='tag-badge'>🏷️ {t.strip()}</span>" for t in str(c['tags']).split(',') if t.strip()])
+                    badges_html = "".join([get_tag_badge_html(t) for t in str(c['tags']).split(',') if t.strip()])
                     st.markdown(badges_html, unsafe_allow_html=True)
             with c2:
                 if c['telefono']:
@@ -560,7 +631,7 @@ with tab3:
                     st.caption("Sin email")
 
 # --- TAB 5: ANALÍTICA ---
-with tab4:
+with tab_metrics:
     if not df_all.empty:
         con = duckdb.connect(database=':memory:')
         con.register('df', df_all)
